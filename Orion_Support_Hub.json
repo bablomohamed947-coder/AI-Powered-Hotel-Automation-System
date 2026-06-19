@@ -1,0 +1,3322 @@
+{
+  "name": "Orion Support Hub",
+  "nodes": [
+    {
+      "parameters": {
+        "updates": [
+          "message"
+        ]
+      },
+      "id": "12bd6218-8ae7-4859-b074-a6963a8eaa93",
+      "name": "Telegram Trigger",
+      "type": "n8n-nodes-base.telegramTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -1800,
+        -1000
+      ],
+      "notesInFlow": true,
+      "credentials": {
+        "telegramApi": {
+          "id": "cred-telegram-bot",
+          "name": "Orion Telegram Bot"
+        }
+      },
+      "notes": "Receives Telegram messages, voice, images, docs, video.",
+      "settings": {
+        "onError": "continueRegularOutput",
+        "alwaysOutputData": false
+      }
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "orion-whatsapp",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "ae4c4420-9a12-4c5f-8da7-1ae8f6f3d3ce",
+      "name": "WhatsApp Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -1800,
+        -500
+      ],
+      "notesInFlow": true,
+      "notes": "WhatsApp Cloud API inbound webhook (text/voice/image/doc/video).",
+      "settings": {
+        "onError": "continueRegularOutput",
+        "alwaysOutputData": false
+      }
+    },
+    {
+      "parameters": {
+        "postProcessAction": "markAsRead",
+        "format": "resolved",
+        "options": {}
+      },
+      "id": "ca530302-10ab-4431-b971-f680f8a04193",
+      "name": "Email Trigger",
+      "type": "n8n-nodes-base.emailReadImap",
+      "typeVersion": 2.2,
+      "position": [
+        -1800,
+        0
+      ],
+      "notesInFlow": true,
+      "credentials": {
+        "imap": {
+          "id": "cred-imap",
+          "name": "Orion Support IMAP Inbox"
+        }
+      },
+      "notes": "Polls support inbox via IMAP; parses body + attachments.",
+      "settings": {
+        "onError": "continueRegularOutput",
+        "alwaysOutputData": false
+      }
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "orion-api",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "c3e25101-7439-4e4a-8c4c-5e9e6688cbf4",
+      "name": "Webhook API",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -1800,
+        500
+      ],
+      "notesInFlow": true,
+      "notes": "Public REST endpoint for programmatic intake.",
+      "settings": {
+        "onError": "continueRegularOutput",
+        "alwaysOutputData": false
+      }
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "orion-crm-events",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "199ad0bc-6d56-4b44-95be-a44011380b43",
+      "name": "CRM Events",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -1800,
+        1000
+      ],
+      "notesInFlow": true,
+      "notes": "Receives CRM lifecycle events (ticket/contact/deal changes).",
+      "settings": {
+        "onError": "continueRegularOutput",
+        "alwaysOutputData": false
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "\n// Orion Support Hub - Multi-channel normalizer\nconst raw = $input.first().json;\nlet channel = 'webhook', customerId = '', name = '', phone = '', email = '';\nlet content = '', contentType = 'text', mediaUrl = '', messageId = '';\n\nif (raw.message && raw.update_id) { // Telegram\n  channel = 'telegram';\n  const m = raw.message;\n  customerId = String(m.chat?.id || '');\n  name = [m.from?.first_name, m.from?.last_name].filter(Boolean).join(' ');\n  username = m.from?.username || '';\n  messageId = String(m.message_id || '');\n  if (m.voice || m.audio) { contentType = 'voice'; mediaUrl = 'telegram-file://'+(m.voice?.file_id||m.audio?.file_id); }\n  else if (m.photo) { contentType = 'image'; mediaUrl = m.photo[m.photo.length-1]?.file_id || ''; }\n  else if (m.document) { contentType = m.document.mime_type?.includes('pdf') ? 'pdf' : 'document'; mediaUrl = m.document.file_id || ''; }\n  else if (m.video) { contentType = 'video'; mediaUrl = m.video.file_id || ''; }\n  content = m.caption || m.text || '';\n} else if (raw.entry && raw.entry[0]?.changes?.[0]?.value?.messages) { // WhatsApp Cloud API\n  channel = 'whatsapp';\n  const v = raw.entry[0].changes[0].value;\n  const msg = v.messages[0];\n  customerId = msg.from || '';\n  name = v.contacts?.[0]?.profile?.name || '';\n  messageId = msg.id || '';\n  if (msg.type === 'audio') { contentType='voice'; mediaUrl=msg.audio.id; }\n  else if (msg.type==='image') { contentType='image'; mediaUrl=msg.image.id; content=msg.image.caption||''; }\n  else if (msg.type==='document') { contentType=msg.document.mime_type?.includes('pdf')?'pdf':'document'; mediaUrl=msg.document.id; }\n  else if (msg.type==='video') { contentType='video'; mediaUrl=msg.video.id; }\n  else content = msg.text?.body || '';\n} else if (raw.textHtml || raw.textPlain || raw.fromAddress) { // Email (IMAP)\n  channel = 'email';\n  email = raw.fromAddress || raw.from?.value?.[0]?.address || '';\n  customerId = email;\n  name = raw.from?.value?.[0]?.name || email;\n  content = raw.textPlain || raw.textHtml || raw.subject || '';\n  messageId = raw.messageId || '';\n  if (raw.attachments?.length) {\n    const a = raw.attachments[0];\n    contentType = a.mimeType?.includes('pdf') ? 'pdf' : (a.mimeType?.startsWith('image') ? 'image' : 'document');\n    mediaUrl = a.fileName || '';\n  }\n} else if (raw.event_type || raw.crm_event) { // CRM Events\n  channel = 'crm';\n  customerId = String(raw.customer_id || raw.contactId || '');\n  content = raw.description || raw.event_type || 'CRM event';\n  contentType = 'text';\n} else { // Webhook API\n  channel = raw.channel || 'webhook';\n  customerId = String(raw.customer_id || raw.customerId || raw.chat_id || '');\n  name = raw.name || raw.customer_name || '';\n  phone = raw.phone || '';\n  email = raw.email || '';\n  content = raw.content || raw.message || JSON.stringify(raw);\n  contentType = raw.content_type || (raw.image_url ? 'image' : (raw.voice_url ? 'voice' : 'text'));\n  mediaUrl = raw.media_url || raw.image_url || raw.voice_url || '';\n  messageId = raw.message_id || '';\n}\n\nreturn [{\n  json: {\n    channel, customerId, name, phone, email, username: typeof username !== 'undefined' ? username : '',\n    content, contentType, mediaUrl, messageId,\n    receivedAt: new Date().toISOString(),\n    requestId: 'req_' + Math.random().toString(36).slice(2, 12)\n  }\n}];\n"
+      },
+      "id": "0396b2bb-4c17-4b90-9645-b8a0a1f9a57b",
+      "name": "Normalize Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1350,
+        0
+      ],
+      "notesInFlow": true,
+      "notes": "Standardizes Telegram/WhatsApp/Email/Webhook/CRM into one schema.",
+      "settings": {
+        "retryOnFail": true,
+        "maxTries": 3,
+        "waitBetweenTries": 5000,
+        "onError": "continueRegularOutput",
+        "alwaysOutputData": false
+      }
+    },
+    {
+      "parameters": {
+        "dataType": "string",
+        "value1": "={{ $json.contentType }}",
+        "rules": {
+          "rules": [
+            {
+              "value2": "voice",
+              "outputKey": "Voice"
+            },
+            {
+              "value2": "image",
+              "outputKey": "Image"
+            },
+            {
+              "value2": "pdf",
+              "outputKey": "PDF"
+            },
+            {
+              "value2": "document",
+              "outputKey": "Document"
+            },
+            {
+              "value2": "video",
+              "outputKey": "Video"
+            }
+          ]
+        },
+        "fallbackOutput": 1,
+        "options": {}
+      },
+      "id": "af1880f7-09fa-4d0f-943c-bf1e4e3c08f9",
+      "name": "Detect Content Type",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 2,
+      "position": [
+        -1050,
+        0
+      ],
+      "notesInFlow": true,
+      "notes": "Routes by detected media type; text falls through to default.",
+      "settings": {
+        "onError": "continueRegularOutput",
+        "alwaysOutputData": false
+      }
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $json.mediaUrl || '' }}",
+        "responseFormat": "file",
+        "options": {}
+      },
+      "id": "af27b7dc-0ac5-4b6a-b9b5-a1abf35b45fb",
+      "name": "Download Voice",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -780,
+        -900
+      ],
+      "notesInFlow": true,
+      "notes": "Fetches voice binary from channel storage.",
+      "settings": {
+        "retryOnFail": true,
+        "maxTries": 5,
+        "waitBetweenTries": 5000,
+        "onError": "continueErrorOutput",
+        "alwaysOutputData": false
+      }
+    },
+    {
+      "parameters": {
+        "resource": "audio",
+        "operation": "transcribe",
+        "modelId": "whisper-1",
+        "fileFieldName": "data",
+        "options": {}
+      },
+      "id": "9f888835-1887-4b89-8f5f-1d938e59f304",
+      "name": "Speech to Text",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1.6,
+      "position": [
+        -510,
+        -900
+      ],
+      "notesInFlow": true,
+      "credentials": {
+        "openAiApi": {
+          "id": "cred-openai",
+          "name": "Orion OpenAI API Key"
+        }
+      },
+      "notes": "OpenAI Whisper transcription of voice messages.",
+      "settings": {
+        "retryOnFail": true,
+        "maxTries": 5,
+        "waitBetweenTries": 5000,
+        "onError": "continueErrorOutput",
+        "alwaysOutputData": false
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "anthropicApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            },
+            {
+              "name": "content-type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\"model\": \"claude-sonnet-4-5-20250929\", \"max_tokens\": 1024, \"system\": \"You are an intent-extraction engine. Return JSON: {intent, category, urgency_1_to_5}.\", \"messages\": [{\"role\": \"user\", \"content\": \"{{ Transcript: $json.text + context: $json.content }}\"}]}",
+        "options": {}
+      },
+      "id": "0f8ce8b6-bbb3-4f0a-8fe5-84221d57935d",
+      "name": "Extract Voice Intent",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -240,
+        -900
+      ],
+      "notesInFlow": true,
+      "credentials": {
+        "anthropicApi": {
+          "id": "cred-anthropic",
+          "name": "Orion Claude API Key"
+        }
+      },
+      "notes": "Claude extracts intent + category from the transcript.",
+      "settings": {
+        "retryOnFail": true,
+        "maxTries": 5,
+        "waitBetweenTries": 5000,
+        "onError": "continueErrorOutput",
+        "alwaysOutputData": false
+      }
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $json.mediaUrl || '' }}",
+        "responseFormat": "file",
+        "options": {}
+      },
+      "id": "f048eb9a-fc57-4839-bc6d-a81b550bbb46",
+      "name": "Download Image",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -780,
+        -500
+      ],
+      "notesInFlow": true,
+      "notes": "Fetches image binary.",
+      "settings": {
+        "retryOnFail": true,
+        "maxTries": 5,
+        "waitBetweenTries": 5000,
+        "onError": "continueErrorOutput",
+        "alwaysOutputData": false
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "anthropicApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            },
+            {
+              "name": "content-type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\"model\": \"claude-sonnet-4-5-20250929\", \"max_tokens\": 768, \"system\": \"You are a multimodal vision analyst. Describe what the customer image shows relevant to a support context. Return concise findings.\", \"messages\": [{\"role\": \"user\", \"content\": \"{{ $json.content + (image attached as mediaUrl) }}\"}]}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": false
+            }
+          }
+        }
+      },
+      "id": "72fc2f20-3709-4cee-abb2-d0b70477d414",
+      "name": "Analyze Image",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -510,
+        -500
+      ],
+      "notesInFlow": false,
+      "credentials": {
+        "anthropicApi": {
+          "id": "cred-anthropic",
+          "name": "Orion Claude API Key"
+        }
+      },
+      "settings": {
+        "retryOnFail": true,
+        "maxTries": 5,
+        "waitBetweenTries": 5000,
+        "onError": "continueErrorOutput",
+        "alwaysOutputData": false
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "anthropicApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            },
+            {
+              "name": "content-type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\"model\": \"claude-sonnet-4-5-20250929\", \"max_tokens\": 2048, \"system\": \"Extract all meaningful text from the provided document page(s). Preserve structure. Return plain text.\", \"messages\": [{\"role\": \"user\", \"content\": \"{{ Document reference: $json.mediaUrl ; caption: $json.content }}\"}]}",
+        "options": {}
+      },
+      "id": "5f788b86-464c-4754-9979-e322ee003ba4",
+      "name": "Extract Document Text",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -780,
+        -100
+      ],
+      "notesInFlow": true,
+      "credentials": {
+        "anthropicApi": {
+          "id": "cred-anthropic",
+          "name": "Orion Claude API Key"
+        }
+      },
+      "notes": "Claude reads the document/PDF and extracts text.",
+      "settings": {
+        "retryOnFail": true,
+        "maxTries": 5,
+        "waitBetweenTries": 5000,
+        "onError": "continueErrorOutput",
+        "alwaysOutputData": false
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "anthropicApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            },
+            {
+              "name": "content-type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\"model\": \"claude-sonnet-4-5-20250929\", \"max_tokens\": 768, \"system\": \"Summarize the extracted document for a support agent. Return: short summary, key points, action items.\", \"messages\": [{\"role\": \"user\", \"content\": \"{{ $json.text }}\"}]}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": false
+            }
+          }
+        }
+      },
+      "id": "073f4143-f95b-4471-8ff6-bdc2469ac990",
+      "name": "Summarize Document",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -510,
+        -100
+      ],
+      "notesInFlow": false,
+      "credentials": {
+        "anthropicApi": {
+          "id": "cred-anthropic",
+          "name": "Orion Claude API Key"
+        }
+      },
+      "settings": {
+        "retryOnFail": true,
+        "maxTries": 5,
+        "waitBetweenTries": 5000,
+        "onError": "continueErrorOutput",
+        "alwaysOutputData": false
+      }
+    },
+    {
+      "parameters": {
+        "resource": "audio",
+        "operation": "transcribe",
+        "modelId": "whisper-1",
+        "fileFieldName": "data",
+        "options": {}
+      },
+      "id": "32ca9f04-2444-4c45-bb03-483143ff7d92",
+      "name": "Analyze Video",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1.6,
+      "position": [
+        -510,
+        250
+      ],
+      "notesInFlow": true,
+      "credentials": {
+        "openAiApi": {
+          "id": "cred-openai",
+          "name": "Orion OpenAI API Key"
+        }
+      },
+      "notes": "Transcribes attached video audio track for context.",
+      "settings": {
+        "retryOnFail": true,
+        "maxTries": 5,
+        "waitBetweenTries": 5000,
+        "onError": "continueErrorOutput",
+        "alwaysOutputData": false
+      }
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineAll",
+        "options": {}
+      },
+      "id": "d64339d7-0b09-4883-9f20-582a3ea4cdb1",
+      "name": "Merge Channels",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 2.2,
+      "position": [
+        -240,
+        0
+      ],
+      "notesInFlow": true,
+      "notes": "Reunifies all media pipelines + plain text into a single stream.",
+      "settings": {
+        "onError": "continueRegularOutput",
+        "alwaysOutputData": false
+      }
+    },
+    {
+      "parameters": {
+        "operation": "execute",
+        "query": "INSERT INTO customers (customer_id, name, phone, email, status, total_orders, last_activity) VALUES ('{{ $json.customerId }}','{{ $json.name }}','{{ $json.phone }}','{{ $json.email }}','active', 0, '{{ $json.receivedAt }}') ON CONFLICT (customer_id) DO UPDATE SET name=EXCLUDED.name, phone=EXCLUDED.phone, email=EXCLUDED.email, last_activity=EXCLUDED.last_activity;",
+        "options": {}
+      },
+      "id": "5dadf0e8-281c-4733-a016-c5a0aa257388",
+      "name": "Store Customer Info",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        40,
+        -560
+      ],
+      "notesInFlow": false,
+      "credentials": {
+        "postgres": {
+          "id": "cred-postgres",
+          "name": "Orion PostgreSQL Database"
+        }
+      },
+      "settings": {
+        "retryOnFail": true,
+        "maxTries": 5,
+        "waitBetweenTries": 5000,
+        "onError": "continueErrorOutput",
+        "alwaysOutputData": false
+      }
+    },
+    {
+      "parameters": {
+        "operation": "execute",
+        "query": "SELECT memory FROM memory WHERE customer_id = '{{ $json.customerId }}' LIMIT 1;",
+        "options": {}
+      },
+      "id": "906669a8-1e40-42f3-89ac-c0df1017c3ce",
+      "name": "Retrieve Customer Memory",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        40,
+        -260
+      ],
+      "notesInFlow": false,
+      "credentials": {
+        "postgres": {
+          "id": "cred-postgres",
+          "name": "Orion PostgreSQL Database"
+        }
+      },
+      "settings": {
+        "retryOnFail": true,
+        "maxTries": 5,
+        "waitBetweenTries": 5000,
+        "onError": "continueErrorOutput",
+        "alwaysOutputData": false
+      }
+    },
+    {
+      "parameters": {
+        "operation": "execute",
+        "query": "SELECT order_id, order_details, status FROM orders WHERE customer_id = '{{ $json.customerId }}' ORDER BY order_id DESC LIMIT 20;",
+        "options": {}
+      },
+      "id": "c92e1edf-d42c-471a-b616-8bf7a9a16ab0",
+      "name": "Retrieve Previous Orders",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        40,
+        40
+      ],
+      "notesInFlow": false,
+      "credentials": {
+        "postgres": {
+          "id": "cred-postgres",
+          "name": "Orion PostgreSQL Database"
+        }
+      },
+      "settings": {
+        "retryOnFail": true,
+        "maxTries": 5,
+        "waitBetweenTries": 5000,
+        "onError": "continueErrorOutput",
+        "alwaysOutputData": false
+      }
+    },
+    {
+      "parameters": {
+        "operation": "execute",
+        "query": "SELECT message_id, content, category, timestamp FROM messages WHERE customer_id = '{{ $json.customerId }}' ORDER BY timestamp DESC LIMIT 50;",
+        "options": {}
+      },
+      "id": "d5a20b48-068f-4154-a139-83dcd7af277f",
+      "name": "Retrieve Customer History",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        40,
+        340
+      ],
+      "notesInFlow": false,
+      "credentials": {
+        "postgres": {
+          "id": "cred-postgres",
+          "name": "Orion PostgreSQL Database"
+        }
+      },
+      "settings": {
+        "retryOnFail": true,
+        "maxTries": 5,
+        "waitBetweenTries": 5000,
+        "onError": "continueErrorOutput",
+        "alwaysOutputData": false
+      }
+    },
+    {
+      "parameters": {
+        "operation": "execute",
+        "query": "SELECT faq, company_policies, product_information FROM knowledge_base WHERE document @@ to_tsquery('{{ $json.content }}') LIMIT 5;",
+        "options": {}
+      },
+      "id": "d5ae092e-651c-4aff-bf84-c90b5923f698",
+      "name": "Search Knowledge Base",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        340,
+        -60
+      ],
+      "notesInFlow": false,
+      "credentials": {
+        "postgres": {
+          "id": "cred-postgres",
+          "name": "Orion PostgreSQL Database"
+        }
+      },
+      "settings": {
+        "retryOnFail": true,
+        "maxTries": 5,
+        "waitBetweenTries": 5000,
+        "onError": "continueErrorOutput",
+        "alwaysOutputData": false
+      }
+    },
+    {
+      "parameters": {
+        "agent": "toolsAgent",
+        "promptType": "define",
+        "text": "=Customer message:\n{{ $json.content }}\n\nCustomer: {{ $json.name }} ({{ $json.customerId }})\nChannel: {{ $json.channel }}",
+        "options": {
+          "systemMessage": "You are Orion, an enterprise-grade AI customer support agent. You reason step by step, are context aware, and polite. Use the available tools to look up orders, search the knowledge base, and open tickets. Decide a category from: general, sales, technical, billing, complaints. Always end your reply with a JSON block: {\"category\":\"...\",\"confidence\":0.x}."
+        }
+      },
+      "id": "01a60fe4-8871-4db3-8897-ada5134b6e42",
+      "name": "Claude AI Agent",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 2,
+      "position": [
+        640,
+        -60
+      ],
+      "notesInFlow": true,
+      "notes": "Primary reasoning agent. Multi-step, context-aware, tool-using.",
+      "settings": {
+        "retryOnFail": true,
+        "maxTries": 5,
+        "waitBetweenTries": 5000,
+        "onError": "continueErrorOutput",
+        "alwaysOutputData": false
+      }
+    },
+    {
+      "parameters": {
+        "model": "claude-sonnet-4-5-20250929",
+        "options": {
+          "maxTokensToSample": 2048,
+          "temperature": 0.4
+        }
+      },
+      "id": "763f8488-5661-4463-a33a-c59864a622fd",
+      "name": "Claude Chat Model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "typeVersion": 1,
+      "position": [
+        430,
+        180
+      ],
+      "notesInFlow": true,
+      "credentials": {
+        "anthropicApi": {
+          "id": "cred-anthropic",
+          "name": "Orion Claude API Key"
+        }
+      },
+      "notes": "Anthropic Claude language model bound to the agent.",
+      "settings": {
+        "retryOnFail": true,
+        "maxTries": 5,
+        "waitBetweenTries": 5000,
+        "onError": "continueRegularOutput",
+        "alwaysOutputData": false
+      }
+    },
+    {
+      "parameters": {
+        "contextWindowLength": 100,
+        "sessionId": "={{ $json.customerId }}"
+      },
+      "id": "ab965b86-011b-41ce-94ea-f7f0784efe3e",
+      "name": "Conversation Memory",
+      "type": "@n8n/n8n-nodes-langchain.memoryBufferWindow",
+      "typeVersion": 1,
+      "position": [
+        640,
+        180
+      ],
+      "notesInFlow": true,
+      "notes": "Rolling memory of the last 100 messages per customer.",
+      "settings": {
+        "retryOnFail": true,
+        "maxTries": 5,
+        "waitBetweenTries": 5000,
+        "onError": "continueRegularOutput",
+        "alwaysOutputData": false
+      }
+    },
+    {
+      "parameters": {
+        "name": "search_knowledge_base",
+        "description": "Search company FAQ, policies and product docs.",
+        "method": "GET",
+        "url": "=https://kb.orion.internal/api/search?q={{$fromAI(\"query\")}}",
+        "options": {}
+      },
+      "id": "fe1429b9-6df6-4c60-b819-24c39c8da5fa",
+      "name": "Knowledge Base Tool",
+      "type": "@n8n/n8n-nodes-langchain.toolHttpRequest",
+      "typeVersion": 1.1,
+      "position": [
+        850,
+        180
+      ],
+      "notesInFlow": true,
+      "notes": "Agent tool: semantic KB lookup.",
+      "settings": {
+        "retryOnFail": true,
+        "maxTries": 5,
+        "waitBetweenTries": 5000,
+        "onError": "continueRegularOutput",
+        "alwaysOutputData": false
+      }
+    },
+    {
+      "parameters": {
+        "name": "lookup_orders",
+        "description": "Fetch a customer's recent orders.",
+        "jsCode": "const id = $fromAI('customer_id'); return [{json:{orders:[]}}];"
+      },
+      "id": "9575bc29-7b35-469f-8dd1-f0b3fe3aaba5",
+      "name": "Order Lookup Tool",
+      "type": "@n8n/n8n-nodes-langchain.toolCode",
+      "typeVersion": 1.1,
+      "position": [
+        1060,
+        180
+      ],
+      "notesInFlow": true,
+      "notes": "Agent tool: retrieve order history.",
+      "settings": {
+        "retryOnFail": true,
+        "maxTries": 5,
+        "waitBetweenTries": 5000,
+        "onError": "continueRegularOutput",
+        "alwaysOutputData": false
+      }
+    },
+    {
+      "parameters": {
+        "name": "create_ticket",
+        "description": "Create a support ticket in the CRM.",
+        "jsCode": "const subject=$fromAI('subject'); return [{json:{ticketId:'TKT-'+Date.now()}}];"
+      },
+      "id": "099d3d3b-e64c-492f-bffa-2af17ed253d0",
+      "name": "Ticket Tool",
+      "type": "@n8n/n8n-nodes-langchain.toolCode",
+      "typeVersion": 1.1,
+      "position": [
+        1270,
+        180
+      ],
+      "notesInFlow": true,
+      "notes": "Agent tool: open tickets automatically.",
+      "settings": {
+        "retryOnFail": true,
+        "maxTries": 5,
+        "waitBetweenTries": 5000,
+        "onError": "continueRegularOutput",
+        "alwaysOutputData": false
+      }
+    },
+    {
+      "parameters": {
+        "dataType": "string",
+        "value1": "={{ $json.category || 'general' }}",
+        "rules": {
+          "rules": [
+            {
+              "value2": "general",
+              "outputKey": "General Support"
+            },
+            {
+              "value2": "sales",
+              "outputKey": "Sales"
+            },
+            {
+              "value2": "technical",
+              "outputKey": "Technical"
+            },
+            {
+              "value2": "billing",
+              "outputKey": "Billing"
+            },
+            {
+              "value2": "complaints",
+              "outputKey": "Complaints"
+            }
+          ]
+        },
+        "fallbackOutput": 1,
+        "options": {}
+      },
+      "id": "79e59918-4d89-4b66-b306-f96df78a9595",
+      "name": "Intelligent Routing",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 2,
+      "position": [
+        960,
+        -60
+      ],
+      "notesInFlow": true,
+      "notes": "Routes to one of 5 specialist paths by classified category.",
+      "settings": {
+        "onError": "continueRegularOutput",
+        "alwaysOutputData": false
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "anthropicApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            },
+            {
+              "name": "content-type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\"model\": \"claude-sonnet-4-5-20250929\", \"max_tokens\": 1024, \"system\": \"You are a domain analyst for General Support. Handle general support: FAQs, account, how-to. Be clear and helpful. Produce a concise root-cause/need analysis as JSON {analysis, category, severity_1_5}.\", \"messages\": [{\"role\": \"user\", \"content\": \"{{ $json.content + ' || context: ' + ($json.text||'') }}\"}]}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": false
+            }
+          }
+        }
+      },
+      "id": "f4a67d23-dd62-47be-acab-edec0fe7d86d",
+      "name": "AI Analysis - General Support",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1260,
+        -1300
+      ],
+      "notesInFlow": false,
+      "credentials": {
+        "anthropicApi": {
+          "id": "cred-anthropic",
+          "name": "Orion Claude API Key"
+        }
+      },
+      "settings": {
+        "retryOnFail": true,
+        "maxTries": 5,
+        "waitBetweenTries": 5000,
+        "onError": "continueErrorOutput",
+        "alwaysOutputData": false
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "\nconst sentiment = ($json.sentiment || '').toLowerCase();\nconst content = ($json.content || '').toLowerCase();\nlet score = 2;\nconst red = ['urgent','asap','broken','down','cannot','error','angry','lawsuit','cancel','refund','unacceptable'];\nif (red.some(w => content.includes(w))) score += 2;\nif (sentiment.includes('negative') || sentiment.includes('angry')) score += 1;\nif (sentiment.includes('very negative')) score += 1;\nconst priority = score >= 4 ? 'P1-Critical' : score === 3 ? 'P2-High' : 'P3-Normal';\nreturn [{json:{...$json, priority, priorityScore: Math.min(score,5), path: 'General Support'}}];\n"
+      },
+      "id": "72949a1a-7ee9-4c9d-8fe3-8e039c1bf19d",
+      "name": "Priority Detection - General Support",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1560,
+        -1300
+      ],
+      "notesInFlow": false,
+      "settings": {
+        "retryOnFail": true,
+        "maxTries": 5,
+        "waitBetweenTries": 5000,
+        "onError": "continueRegularOutput",
+        "alwaysOutputData": false
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "anthropicApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            },
+            {
+              "name": "content-type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\"model\": \"claude-sonnet-4-5-20250929\", \"max_tokens\": 1024, \"system\": \"Classify customer sentiment. Return JSON {sentiment: positive|neutral|negative|very negative, score_1_5, emotion}.\", \"messages\": [{\"role\": \"user\", \"content\": \"{{ $json.content + ($json.text||'') }}\"}]}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": false
+            }
+          }
+        }
+      },
+      "id": "ae3989f8-8274-4cb2-8266-7e71361308e0",
+      "name": "Sentiment Analysis - General Support",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1860,
+        -1300
+      ],
+      "notesInFlow": false,
+      "credentials": {
+        "anthropicApi": {
+          "id": "cred-anthropic",
+          "name": "Orion Claude API Key"
+        }
+      },
+      "settings": {
+        "retryOnFail": true,
+        "maxTries": 5,
+        "waitBetweenTries": 5000,
+        "onError": "continueErrorOutput",
+        "alwaysOutputData": false
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "anthropicApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            },
+            {
+              "name": "content-type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\"model\": \"claude-sonnet-4-5-20250929\", \"max_tokens\": 1024, \"system\": \"Write the final customer-facing reply for a General Support case. Tone: professional, empathetic, concise. End with the JSON tag.\", \"messages\": [{\"role\": \"user\", \"content\": \"{{ $json.analysis + ' || ' + $json.content }}\"}]}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": false
+            }
+          }
+        }
+      },
+      "id": "820dfdf6-1daa-400d-ab8a-240605addc0a",
+      "name": "Suggested Response - General Support",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2160,
+        -1300
+      ],
+      "notesInFlow": false,
+      "credentials": {
+        "anthropicApi": {
+          "id": "cred-anthropic",
+          "name": "Orion Claude API Key"
+        }
+      },
+      "settings": {
+        "retryOnFail": true,
+        "maxTries": 5,
+        "waitBetweenTries": 5000,
+        "onError": "continueErrorOutput",
+        "alwaysOutputData": false
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "anthropicApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            },
+            {
+              "name": "content-type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\"model\": \"claude-sonnet-4-5-20250929\", \"max_tokens\": 1024, \"system\": \"You are a domain analyst for Sales. Answer sales questions: pricing, plans, demos, ROI, quotes. Produce a concise root-cause/need analysis as JSON {analysis, category, severity_1_5}.\", \"messages\": [{\"role\": \"user\", \"content\": \"{{ $json.content + ' || context: ' + ($json.text||'') }}\"}]}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": false
+            }
+          }
+        }
+      },
+      "id": "469c51d2-4d57-4f2b-92b6-6efd5f4ff544",
+      "name": "AI Analysis - Sales",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1260,
+        -650
+      ],
+      "notesInFlow": false,
+      "credentials": {
+        "anthropicApi": {
+          "id": "cred-anthropic",
+          "name": "Orion Claude API Key"
+        }
+      },
+      "settings": {
+        "retryOnFail": true,
+        "maxTries": 5,
+        "waitBetweenTries": 5000,
+        "onError": "continueErrorOutput",
+        "alwaysOutputData": false
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "\nconst sentiment = ($json.sentiment || '').toLowerCase();\nconst content = ($json.content || '').toLowerCase();\nlet score = 2;\nconst red = ['urgent','asap','broken','down','cannot','error','angry','lawsuit','cancel','refund','unacceptable'];\nif (red.some(w => content.includes(w))) score += 2;\nif (sentiment.includes('negative') || sentiment.includes('angry')) score += 1;\nif (sentiment.includes('very negative')) score += 1;\nconst priority = score >= 4 ? 'P1-Critical' : score === 3 ? 'P2-High' : 'P3-Normal';\nreturn [{json:{...$json, priority, priorityScore: Math.min(score,5), path: 'Sales'}}];\n"
+      },
+      "id": "58899b26-44d6-48e9-981e-537b80fd157a",
+      "name": "Priority Detection - Sales",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1560,
+        -650
+      ],
+      "notesInFlow": false,
+      "settings": {
+        "retryOnFail": true,
+        "maxTries": 5,
+        "waitBetweenTries": 5000,
+        "onError": "continueRegularOutput",
+        "alwaysOutputData": false
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "anthropicApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            },
+            {
+              "name": "content-type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\"model\": \"claude-sonnet-4-5-20250929\", \"max_tokens\": 1024, \"system\": \"Classify customer sentiment. Return JSON {sentiment: positive|neutral|negative|very negative, score_1_5, emotion}.\", \"messages\": [{\"role\": \"user\", \"content\": \"{{ $json.content + ($json.text||'') }}\"}]}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": false
+            }
+          }
+        }
+      },
+      "id": "ec0dd9ce-b3b7-4e5d-9701-b38f16e17a58",
+      "name": "Sentiment Analysis - Sales",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1860,
+        -650
+      ],
+      "notesInFlow": false,
+      "credentials": {
+        "anthropicApi": {
+          "id": "cred-anthropic",
+          "name": "Orion Claude API Key"
+        }
+      },
+      "settings": {
+        "retryOnFail": true,
+        "maxTries": 5,
+        "waitBetweenTries": 5000,
+        "onError": "continueErrorOutput",
+        "alwaysOutputData": false
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "anthropicApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            },
+            {
+              "name": "content-type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\"model\": \"claude-sonnet-4-5-20250929\", \"max_tokens\": 1024, \"system\": \"Write the final customer-facing reply for a Sales case. Tone: professional, empathetic, concise. End with the JSON tag.\", \"messages\": [{\"role\": \"user\", \"content\": \"{{ $json.analysis + ' || ' + $json.content }}\"}]}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": false
+            }
+          }
+        }
+      },
+      "id": "d6e0083f-746b-405a-ad42-17fe8732af14",
+      "name": "Suggested Response - Sales",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2160,
+        -650
+      ],
+      "notesInFlow": false,
+      "credentials": {
+        "anthropicApi": {
+          "id": "cred-anthropic",
+          "name": "Orion Claude API Key"
+        }
+      },
+      "settings": {
+        "retryOnFail": true,
+        "maxTries": 5,
+        "waitBetweenTries": 5000,
+        "onError": "continueErrorOutput",
+        "alwaysOutputData": false
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "anthropicApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            },
+            {
+              "name": "content-type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\"model\": \"claude-sonnet-4-5-20250929\", \"max_tokens\": 1024, \"system\": \"You are a domain analyst for Technical. Diagnose technical issues: bugs, errors, integrations, logs, steps. Produce a concise root-cause/need analysis as JSON {analysis, category, severity_1_5}.\", \"messages\": [{\"role\": \"user\", \"content\": \"{{ $json.content + ' || context: ' + ($json.text||'') }}\"}]}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": false
+            }
+          }
+        }
+      },
+      "id": "513af751-a355-43aa-8c0e-2b525311de1e",
+      "name": "AI Analysis - Technical",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1260,
+        0
+      ],
+      "notesInFlow": false,
+      "credentials": {
+        "anthropicApi": {
+          "id": "cred-anthropic",
+          "name": "Orion Claude API Key"
+        }
+      },
+      "settings": {
+        "retryOnFail": true,
+        "maxTries": 5,
+        "waitBetweenTries": 5000,
+        "onError": "continueErrorOutput",
+        "alwaysOutputData": false
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "\nconst sentiment = ($json.sentiment || '').toLowerCase();\nconst content = ($json.content || '').toLowerCase();\nlet score = 2;\nconst red = ['urgent','asap','broken','down','cannot','error','angry','lawsuit','cancel','refund','unacceptable'];\nif (red.some(w => content.includes(w))) score += 2;\nif (sentiment.includes('negative') || sentiment.includes('angry')) score += 1;\nif (sentiment.includes('very negative')) score += 1;\nconst priority = score >= 4 ? 'P1-Critical' : score === 3 ? 'P2-High' : 'P3-Normal';\nreturn [{json:{...$json, priority, priorityScore: Math.min(score,5), path: 'Technical'}}];\n"
+      },
+      "id": "bf392963-e807-45f8-bb73-8224fc8fc08c",
+      "name": "Priority Detection - Technical",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1560,
+        0
+      ],
+      "notesInFlow": false,
+      "settings": {
+        "retryOnFail": true,
+        "maxTries": 5,
+        "waitBetweenTries": 5000,
+        "onError": "continueRegularOutput",
+        "alwaysOutputData": false
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "anthropicApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            },
+            {
+              "name": "content-type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\"model\": \"claude-sonnet-4-5-20250929\", \"max_tokens\": 1024, \"system\": \"Classify customer sentiment. Return JSON {sentiment: positive|neutral|negative|very negative, score_1_5, emotion}.\", \"messages\": [{\"role\": \"user\", \"content\": \"{{ $json.content + ($json.text||'') }}\"}]}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": false
+            }
+          }
+        }
+      },
+      "id": "2d744a20-f0b2-40fa-909d-76cd54d81a13",
+      "name": "Sentiment Analysis - Technical",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1860,
+        0
+      ],
+      "notesInFlow": false,
+      "credentials": {
+        "anthropicApi": {
+          "id": "cred-anthropic",
+          "name": "Orion Claude API Key"
+        }
+      },
+      "settings": {
+        "retryOnFail": true,
+        "maxTries": 5,
+        "waitBetweenTries": 5000,
+        "onError": "continueErrorOutput",
+        "alwaysOutputData": false
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "anthropicApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            },
+            {
+              "name": "content-type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\"model\": \"claude-sonnet-4-5-20250929\", \"max_tokens\": 1024, \"system\": \"Write the final customer-facing reply for a Technical case. Tone: professional, empathetic, concise. End with the JSON tag.\", \"messages\": [{\"role\": \"user\", \"content\": \"{{ $json.analysis + ' || ' + $json.content }}\"}]}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": false
+            }
+          }
+        }
+      },
+      "id": "f8dcad35-da81-4f80-9b0f-9af7c7b9f2a9",
+      "name": "Suggested Response - Technical",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2160,
+        0
+      ],
+      "notesInFlow": false,
+      "credentials": {
+        "anthropicApi": {
+          "id": "cred-anthropic",
+          "name": "Orion Claude API Key"
+        }
+      },
+      "settings": {
+        "retryOnFail": true,
+        "maxTries": 5,
+        "waitBetweenTries": 5000,
+        "onError": "continueErrorOutput",
+        "alwaysOutputData": false
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "anthropicApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            },
+            {
+              "name": "content-type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\"model\": \"claude-sonnet-4-5-20250929\", \"max_tokens\": 1024, \"system\": \"You are a domain analyst for Billing And Payments. Resolve billing: invoices, refunds, charges, subscription, receipts. Produce a concise root-cause/need analysis as JSON {analysis, category, severity_1_5}.\", \"messages\": [{\"role\": \"user\", \"content\": \"{{ $json.content + ' || context: ' + ($json.text||'') }}\"}]}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": false
+            }
+          }
+        }
+      },
+      "id": "17ca23d1-f142-4011-9ee1-0f0ff7c9017a",
+      "name": "AI Analysis - Billing And Payments",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1260,
+        650
+      ],
+      "notesInFlow": false,
+      "credentials": {
+        "anthropicApi": {
+          "id": "cred-anthropic",
+          "name": "Orion Claude API Key"
+        }
+      },
+      "settings": {
+        "retryOnFail": true,
+        "maxTries": 5,
+        "waitBetweenTries": 5000,
+        "onError": "continueErrorOutput",
+        "alwaysOutputData": false
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "\nconst sentiment = ($json.sentiment || '').toLowerCase();\nconst content = ($json.content || '').toLowerCase();\nlet score = 2;\nconst red = ['urgent','asap','broken','down','cannot','error','angry','lawsuit','cancel','refund','unacceptable'];\nif (red.some(w => content.includes(w))) score += 2;\nif (sentiment.includes('negative') || sentiment.includes('angry')) score += 1;\nif (sentiment.includes('very negative')) score += 1;\nconst priority = score >= 4 ? 'P1-Critical' : score === 3 ? 'P2-High' : 'P3-Normal';\nreturn [{json:{...$json, priority, priorityScore: Math.min(score,5), path: 'Billing And Payments'}}];\n"
+      },
+      "id": "81b1dd13-9f8f-437a-9249-412bf425c35b",
+      "name": "Priority Detection - Billing And Payments",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1560,
+        650
+      ],
+      "notesInFlow": false,
+      "settings": {
+        "retryOnFail": true,
+        "maxTries": 5,
+        "waitBetweenTries": 5000,
+        "onError": "continueRegularOutput",
+        "alwaysOutputData": false
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "anthropicApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            },
+            {
+              "name": "content-type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\"model\": \"claude-sonnet-4-5-20250929\", \"max_tokens\": 1024, \"system\": \"Classify customer sentiment. Return JSON {sentiment: positive|neutral|negative|very negative, score_1_5, emotion}.\", \"messages\": [{\"role\": \"user\", \"content\": \"{{ $json.content + ($json.text||'') }}\"}]}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": false
+            }
+          }
+        }
+      },
+      "id": "d7999693-7958-442d-921e-9af26bcfdb97",
+      "name": "Sentiment Analysis - Billing And Payments",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1860,
+        650
+      ],
+      "notesInFlow": false,
+      "credentials": {
+        "anthropicApi": {
+          "id": "cred-anthropic",
+          "name": "Orion Claude API Key"
+        }
+      },
+      "settings": {
+        "retryOnFail": true,
+        "maxTries": 5,
+        "waitBetweenTries": 5000,
+        "onError": "continueErrorOutput",
+        "alwaysOutputData": false
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "anthropicApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            },
+            {
+              "name": "content-type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\"model\": \"claude-sonnet-4-5-20250929\", \"max_tokens\": 1024, \"system\": \"Write the final customer-facing reply for a Billing And Payments case. Tone: professional, empathetic, concise. End with the JSON tag.\", \"messages\": [{\"role\": \"user\", \"content\": \"{{ $json.analysis + ' || ' + $json.content }}\"}]}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": false
+            }
+          }
+        }
+      },
+      "id": "9979f1c4-bce9-4415-9200-fd2e903396d1",
+      "name": "Suggested Response - Billing And Payments",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2160,
+        650
+      ],
+      "notesInFlow": false,
+      "credentials": {
+        "anthropicApi": {
+          "id": "cred-anthropic",
+          "name": "Orion Claude API Key"
+        }
+      },
+      "settings": {
+        "retryOnFail": true,
+        "maxTries": 5,
+        "waitBetweenTries": 5000,
+        "onError": "continueErrorOutput",
+        "alwaysOutputData": false
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "anthropicApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            },
+            {
+              "name": "content-type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\"model\": \"claude-sonnet-4-5-20250929\", \"max_tokens\": 1024, \"system\": \"You are a domain analyst for Complaints And Escalations. De-escalate complaints with empathy; flag SLA/escalation triggers. Produce a concise root-cause/need analysis as JSON {analysis, category, severity_1_5}.\", \"messages\": [{\"role\": \"user\", \"content\": \"{{ $json.content + ' || context: ' + ($json.text||'') }}\"}]}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": false
+            }
+          }
+        }
+      },
+      "id": "67b62c27-5b7f-4168-b438-76553b39cb59",
+      "name": "AI Analysis - Complaints And Escalations",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1260,
+        1300
+      ],
+      "notesInFlow": false,
+      "credentials": {
+        "anthropicApi": {
+          "id": "cred-anthropic",
+          "name": "Orion Claude API Key"
+        }
+      },
+      "settings": {
+        "retryOnFail": true,
+        "maxTries": 5,
+        "waitBetweenTries": 5000,
+        "onError": "continueErrorOutput",
+        "alwaysOutputData": false
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "\nconst sentiment = ($json.sentiment || '').toLowerCase();\nconst content = ($json.content || '').toLowerCase();\nlet score = 2;\nconst red = ['urgent','asap','broken','down','cannot','error','angry','lawsuit','cancel','refund','unacceptable'];\nif (red.some(w => content.includes(w))) score += 2;\nif (sentiment.includes('negative') || sentiment.includes('angry')) score += 1;\nif (sentiment.includes('very negative')) score += 1;\nconst priority = score >= 4 ? 'P1-Critical' : score === 3 ? 'P2-High' : 'P3-Normal';\nreturn [{json:{...$json, priority, priorityScore: Math.min(score,5), path: 'Complaints And Escalations'}}];\n"
+      },
+      "id": "382fda48-ef65-4c87-9e28-95992b1e2e03",
+      "name": "Priority Detection - Complaints And Escalations",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1560,
+        1300
+      ],
+      "notesInFlow": false,
+      "settings": {
+        "retryOnFail": true,
+        "maxTries": 5,
+        "waitBetweenTries": 5000,
+        "onError": "continueRegularOutput",
+        "alwaysOutputData": false
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "anthropicApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            },
+            {
+              "name": "content-type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\"model\": \"claude-sonnet-4-5-20250929\", \"max_tokens\": 1024, \"system\": \"Classify customer sentiment. Return JSON {sentiment: positive|neutral|negative|very negative, score_1_5, emotion}.\", \"messages\": [{\"role\": \"user\", \"content\": \"{{ $json.content + ($json.text||'') }}\"}]}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": false
+            }
+          }
+        }
+      },
+      "id": "eb78f4de-0cc1-4802-aaf1-41e4e3fc4f1a",
+      "name": "Sentiment Analysis - Complaints And Escalations",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1860,
+        1300
+      ],
+      "notesInFlow": false,
+      "credentials": {
+        "anthropicApi": {
+          "id": "cred-anthropic",
+          "name": "Orion Claude API Key"
+        }
+      },
+      "settings": {
+        "retryOnFail": true,
+        "maxTries": 5,
+        "waitBetweenTries": 5000,
+        "onError": "continueErrorOutput",
+        "alwaysOutputData": false
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "anthropicApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            },
+            {
+              "name": "content-type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\"model\": \"claude-sonnet-4-5-20250929\", \"max_tokens\": 1024, \"system\": \"Write the final customer-facing reply for a Complaints And Escalations case. Tone: professional, empathetic, concise. End with the JSON tag.\", \"messages\": [{\"role\": \"user\", \"content\": \"{{ $json.analysis + ' || ' + $json.content }}\"}]}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": false
+            }
+          }
+        }
+      },
+      "id": "8b357c82-658f-4d1e-9d04-33aa0953109e",
+      "name": "Suggested Response - Complaints And Escalations",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2160,
+        1300
+      ],
+      "notesInFlow": false,
+      "credentials": {
+        "anthropicApi": {
+          "id": "cred-anthropic",
+          "name": "Orion Claude API Key"
+        }
+      },
+      "settings": {
+        "retryOnFail": true,
+        "maxTries": 5,
+        "waitBetweenTries": 5000,
+        "onError": "continueErrorOutput",
+        "alwaysOutputData": false
+      }
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineAll",
+        "options": {}
+      },
+      "id": "5dc2eef6-434c-4d2f-ac54-2ddbdd8cf8e1",
+      "name": "Merge Path Responses",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 2.2,
+      "position": [
+        2260,
+        0
+      ],
+      "notesInFlow": true,
+      "notes": "Converges the 5 specialist paths.",
+      "settings": {
+        "onError": "continueRegularOutput",
+        "alwaysOutputData": false
+      }
+    },
+    {
+      "parameters": {
+        "operation": "execute",
+        "query": "INSERT INTO memory (customer_id, last_100_messages) VALUES ('{{ $json.customerId }}', '{{ $json.content }}') ON CONFLICT (customer_id) DO UPDATE SET last_100_messages = memory.last_100_messages || E'\\n' || EXCLUDED.last_100_messages, updated_at = NOW();",
+        "options": {}
+      },
+      "id": "17cfe7f3-0373-4019-99a3-df16850405ea",
+      "name": "Update Memory",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        2520,
+        -360
+      ],
+      "notesInFlow": false,
+      "credentials": {
+        "postgres": {
+          "id": "cred-postgres",
+          "name": "Orion PostgreSQL Database"
+        }
+      },
+      "settings": {
+        "retryOnFail": true,
+        "maxTries": 5,
+        "waitBetweenTries": 5000,
+        "onError": "continueErrorOutput",
+        "alwaysOutputData": false
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://crm.orion.internal/api/v1/tickets",
+        "options": {},
+        "authentication": "genericCredentialType",
+        "genericCredentialType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\"customer_id\": \"{{ $json.customerId }}\", \"subject\": \"{{ $json.analysis }}\", \"priority\": \"{{ $json.priority }}\", \"category\": \"{{ $json.category }}\", \"source\": \"{{ $json.channel }}\"}"
+      },
+      "id": "1450e65f-f7e6-4cb2-a9c0-90d37720b20a",
+      "name": "CRM: Create Ticket",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2520,
+        -60
+      ],
+      "notesInFlow": false,
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "cred-crm",
+          "name": "Orion CRM API"
+        }
+      },
+      "settings": {
+        "retryOnFail": true,
+        "maxTries": 5,
+        "waitBetweenTries": 5000,
+        "onError": "continueErrorOutput",
+        "alwaysOutputData": false
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://crm.orion.internal/api/v1/tickets/{{ $json.ticketId || 'auto' }}/notes",
+        "options": {},
+        "authentication": "genericCredentialType",
+        "genericCredentialType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\"author\": \"Orion AI\", \"note\": \"{{ $json.analysis }} | sentiment={{ $json.sentiment }} | confidence={{ $json.confidence }}\"}"
+      },
+      "id": "01185e74-02ef-4ac5-95f7-ea8d7c6a25a2",
+      "name": "CRM: Store AI Notes",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2520,
+        240
+      ],
+      "notesInFlow": false,
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "cred-crm",
+          "name": "Orion CRM API"
+        }
+      },
+      "settings": {
+        "retryOnFail": true,
+        "maxTries": 5,
+        "waitBetweenTries": 5000,
+        "onError": "continueErrorOutput",
+        "alwaysOutputData": false
+      }
+    },
+    {
+      "parameters": {
+        "operation": "execute",
+        "query": "SELECT status, amount, currency FROM payments WHERE customer_id = '{{ $json.customerId }}' ORDER BY paid_at DESC LIMIT 5;",
+        "options": {}
+      },
+      "id": "d93d2301-5160-4784-b424-5a57d63d6c21",
+      "name": "Verify Payment Status",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        2520,
+        540
+      ],
+      "notesInFlow": true,
+      "credentials": {
+        "postgres": {
+          "id": "cred-postgres",
+          "name": "Orion PostgreSQL Database"
+        }
+      },
+      "notes": "Read-only payment status (no gateway connection).",
+      "settings": {
+        "retryOnFail": true,
+        "maxTries": 5,
+        "waitBetweenTries": 5000,
+        "onError": "continueErrorOutput",
+        "alwaysOutputData": false
+      }
+    },
+    {
+      "parameters": {
+        "operation": "execute",
+        "query": "SELECT invoice_id, total, due_date, status FROM invoices WHERE customer_id = '{{ $json.customerId }}' ORDER BY due_date DESC LIMIT 10;",
+        "options": {}
+      },
+      "id": "642ce2b1-ece5-4f8e-a84b-c2d2ae041988",
+      "name": "Track Invoices",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        2820,
+        540
+      ],
+      "notesInFlow": true,
+      "credentials": {
+        "postgres": {
+          "id": "cred-postgres",
+          "name": "Orion PostgreSQL Database"
+        }
+      },
+      "notes": "Invoice tracking lookup.",
+      "settings": {
+        "retryOnFail": true,
+        "maxTries": 5,
+        "waitBetweenTries": 5000,
+        "onError": "continueErrorOutput",
+        "alwaysOutputData": false
+      }
+    },
+    {
+      "parameters": {
+        "dataType": "string",
+        "value1": "={{ $json.channel }}",
+        "rules": {
+          "rules": [
+            {
+              "value2": "telegram",
+              "outputKey": "Telegram"
+            },
+            {
+              "value2": "whatsapp",
+              "outputKey": "WhatsApp"
+            },
+            {
+              "value2": "email",
+              "outputKey": "Email"
+            },
+            {
+              "value2": "webhook",
+              "outputKey": "Webhook"
+            }
+          ]
+        },
+        "fallbackOutput": 1,
+        "options": {}
+      },
+      "id": "d622fda0-0938-4e3e-be89-7991378b4267",
+      "name": "Select Output Channel",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 2,
+      "position": [
+        2820,
+        -60
+      ],
+      "notesInFlow": true,
+      "notes": "Delivers the AI reply on the originating channel.",
+      "settings": {
+        "onError": "continueRegularOutput",
+        "alwaysOutputData": false
+      }
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "sendMessage",
+        "chatId": "={{ $json.customerId }}",
+        "text": "={{ $json.output || $json.content }}",
+        "additionalFields": {}
+      },
+      "id": "c1abce9f-36c2-4f78-a24f-3e62be9e65a5",
+      "name": "Reply on Telegram",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        3120,
+        -560
+      ],
+      "notesInFlow": true,
+      "credentials": {
+        "telegramApi": {
+          "id": "cred-telegram-bot",
+          "name": "Orion Telegram Bot"
+        }
+      },
+      "notes": "Send reply via Telegram.",
+      "settings": {
+        "retryOnFail": true,
+        "maxTries": 5,
+        "waitBetweenTries": 5000,
+        "onError": "continueErrorOutput",
+        "alwaysOutputData": false
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://graph.facebook.com/v19.0/{{ $env.WA_PHONE_ID }}/messages",
+        "authentication": "genericCredentialType",
+        "genericCredentialType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\"messaging_product\": \"whatsapp\", \"to\": \"={{ $json.customerId }}\", \"type\": \"text\", \"text\": {\"body\": \"{{ $json.output || $json.content }}\"}}",
+        "options": {}
+      },
+      "id": "64268af5-b6aa-4a18-b906-b36e10d2a017",
+      "name": "Reply on WhatsApp",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3120,
+        -260
+      ],
+      "notesInFlow": true,
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "cred-whatsapp",
+          "name": "Orion WhatsApp Cloud API"
+        }
+      },
+      "notes": "Send reply via WhatsApp Cloud API.",
+      "settings": {
+        "retryOnFail": true,
+        "maxTries": 5,
+        "waitBetweenTries": 5000,
+        "onError": "continueErrorOutput",
+        "alwaysOutputData": false
+      }
+    },
+    {
+      "parameters": {
+        "fromEmail": "support@orion.internal",
+        "toEmail": "={{ $json.email || $json.customerId }}",
+        "subject": "Re: Your request to Orion Support",
+        "emailFormat": "text",
+        "message": "={{ $json.output || $json.content }}",
+        "options": {}
+      },
+      "id": "ae9c8e3c-c2a8-46f4-9727-7cb731fd8924",
+      "name": "Reply on Email",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        3120,
+        40
+      ],
+      "notesInFlow": true,
+      "credentials": {
+        "smtp": {
+          "id": "cred-smtp",
+          "name": "Orion SMTP Outbound"
+        }
+      },
+      "notes": "Send reply via SMTP.",
+      "settings": {
+        "retryOnFail": true,
+        "maxTries": 5,
+        "waitBetweenTries": 5000,
+        "onError": "continueErrorOutput",
+        "alwaysOutputData": false
+      }
+    },
+    {
+      "parameters": {
+        "responseCode": 200,
+        "responseData": "={{ JSON.stringify({status:'ok', reply: $json.output || $json.content, ticket:$json.ticketId}) }}"
+      },
+      "id": "3536bd75-e540-44c4-b83f-c260fa144036",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        3120,
+        340
+      ],
+      "notesInFlow": true,
+      "notes": "Closes the Webhook/CRM event response.",
+      "settings": {
+        "onError": "continueRegularOutput",
+        "alwaysOutputData": false
+      }
+    },
+    {
+      "parameters": {
+        "operation": "execute",
+        "query": "INSERT INTO analytics (request_id, customer_id, channel, category, priority, response_ms, created_at) VALUES ('{{ $json.requestId }}','{{ $json.customerId }}','{{ $json.channel }}','{{ $json.category }}','{{ $json.priority }}', EXTRACT(EPOCH FROM (NOW() - '{{ $json.receivedAt }}'::timestamptz))*1000, NOW());",
+        "options": {}
+      },
+      "id": "20afa345-343c-4e72-851a-498c15b1250d",
+      "name": "Log Analytics",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        3420,
+        -60
+      ],
+      "notesInFlow": true,
+      "credentials": {
+        "postgres": {
+          "id": "cred-postgres",
+          "name": "Orion PostgreSQL Database"
+        }
+      },
+      "notes": "Execution + response-time analytics sink.",
+      "settings": {
+        "retryOnFail": true,
+        "maxTries": 5,
+        "waitBetweenTries": 5000,
+        "onError": "continueRegularOutput",
+        "alwaysOutputData": false
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const s=$input.first().json; const ms=Math.max(0, Math.round((Date.now()-new Date(s.receivedAt).getTime()))); return [{json:{...s, responseMs:ms, slaMet: ms < 30000}}];"
+      },
+      "id": "489555d3-04a0-47d9-80e3-7f525c41b9e8",
+      "name": "Track Response Time",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3720,
+        -60
+      ],
+      "notesInFlow": true,
+      "notes": "Computes end-to-end response time vs SLA.",
+      "settings": {
+        "retryOnFail": true,
+        "maxTries": 5,
+        "waitBetweenTries": 5000,
+        "onError": "continueRegularOutput",
+        "alwaysOutputData": false
+      }
+    },
+    {
+      "parameters": {},
+      "id": "60a2706c-6337-45fd-8cca-09bc41e33443",
+      "name": "Error Trigger",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [
+        -1800,
+        1600
+      ],
+      "notesInFlow": true,
+      "notes": "Workflow-level failure trigger (set as Error Workflow).",
+      "settings": {
+        "onError": "continueRegularOutput",
+        "alwaysOutputData": false
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const e=$input.first().json; return [{json:{incidentTime:new Date().toISOString(), node:(e.execution||{}).lastNode||'unknown', message:(e.execution||{}).error||JSON.stringify(e), severity:'critical'}}];"
+      },
+      "id": "a314fbf2-b81f-4869-ac96-42f2e737093e",
+      "name": "Handle Critical Error",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1350,
+        1600
+      ],
+      "notesInFlow": true,
+      "notes": "Aggregates error outputs from critical nodes.",
+      "settings": {
+        "retryOnFail": true,
+        "maxTries": 5,
+        "waitBetweenTries": 5000,
+        "onError": "continueRegularOutput",
+        "alwaysOutputData": false
+      }
+    },
+    {
+      "parameters": {
+        "operation": "execute",
+        "query": "INSERT INTO incidents (incident_time, node, message, severity, status) VALUES ('{{ $json.incidentTime || now() }}','{{ $json.node }}','{{ $json.message }}','{{ $json.severity || 'high' }}','open');",
+        "options": {}
+      },
+      "id": "6776c69e-0a60-44ba-a2d4-f8bb9a5f3e34",
+      "name": "Log Failure",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -1050,
+        1600
+      ],
+      "notesInFlow": true,
+      "credentials": {
+        "postgres": {
+          "id": "cred-postgres",
+          "name": "Orion PostgreSQL Database"
+        }
+      },
+      "notes": "Persists every failure to the incidents table.",
+      "settings": {
+        "retryOnFail": true,
+        "maxTries": 5,
+        "waitBetweenTries": 5000,
+        "onError": "continueRegularOutput",
+        "alwaysOutputData": false
+      }
+    },
+    {
+      "parameters": {
+        "operation": "execute",
+        "query": "INSERT INTO incident_records (incident_id, payload, created_at) VALUES ('INC-'+extract(epoch from now())::bigint::text,'{{ $json.message }}', NOW()) RETURNING incident_id;",
+        "options": {}
+      },
+      "id": "56cd36e0-0aff-4148-810f-1f4ebf410f96",
+      "name": "Create Incident Record",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -760,
+        1600
+      ],
+      "notesInFlow": true,
+      "credentials": {
+        "postgres": {
+          "id": "cred-postgres",
+          "name": "Orion PostgreSQL Database"
+        }
+      },
+      "notes": "Durable incident record.",
+      "settings": {
+        "retryOnFail": true,
+        "maxTries": 5,
+        "waitBetweenTries": 5000,
+        "onError": "continueRegularOutput",
+        "alwaysOutputData": false
+      }
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "sendMessage",
+        "chatId": "={{ $env.ADMIN_CHAT_ID }}",
+        "text": "=\ud83d\udea8 Orion Alert: {{ $json.severity }} on {{ $json.node }}: {{ $json.message }}",
+        "additionalFields": {}
+      },
+      "id": "6fa05a73-02f9-4f13-a822-4ca5039a1a01",
+      "name": "Notify Administrator",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        -470,
+        1600
+      ],
+      "notesInFlow": true,
+      "credentials": {
+        "telegramApi": {
+          "id": "cred-telegram-bot",
+          "name": "Orion Telegram Bot"
+        }
+      },
+      "notes": "Alerts the on-call admin channel.",
+      "settings": {
+        "retryOnFail": true,
+        "maxTries": 5,
+        "waitBetweenTries": 5000,
+        "onError": "continueRegularOutput",
+        "alwaysOutputData": false
+      }
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 12
+            }
+          ]
+        }
+      },
+      "id": "b9edb068-7386-4eeb-8049-5855cbc22af7",
+      "name": "Payment Reminders Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -1800,
+        2000
+      ],
+      "notesInFlow": true,
+      "notes": "Daily-ish cadence for payment reminders.",
+      "settings": {
+        "onError": "continueRegularOutput",
+        "alwaysOutputData": false
+      }
+    },
+    {
+      "parameters": {
+        "fromEmail": "billing@orion.internal",
+        "toEmail": "={{ $json.email }}",
+        "subject": "Reminder: Invoice {{ $json.invoice_id }} is overdue",
+        "emailFormat": "text",
+        "message": "Hi {{ $json.name }}, your invoice {{ $json.invoice_id }} ({{ $json.total }}) is {{ $json.status }}. Please complete payment. - Orion Billing",
+        "options": {}
+      },
+      "id": "2f2eadeb-1e15-4822-89e3-71933ea05421",
+      "name": "Send Payment Reminders",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        -1350,
+        2000
+      ],
+      "notesInFlow": true,
+      "credentials": {
+        "smtp": {
+          "id": "cred-smtp",
+          "name": "Orion SMTP Outbound"
+        }
+      },
+      "notes": "Overdue invoice reminder (no gateway).",
+      "settings": {
+        "retryOnFail": true,
+        "maxTries": 5,
+        "waitBetweenTries": 5000,
+        "onError": "continueErrorOutput",
+        "alwaysOutputData": false
+      }
+    },
+    {
+      "parameters": {},
+      "id": "8745d86d-00fb-4b8c-9e30-3adaf7f6ef45",
+      "name": "Initialize Database",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -1800,
+        2400
+      ],
+      "notesInFlow": true,
+      "notes": "Run once to provision the Orion schema.",
+      "settings": {
+        "onError": "continueRegularOutput",
+        "alwaysOutputData": false
+      }
+    },
+    {
+      "parameters": {
+        "operation": "execute",
+        "query": "CREATE TABLE IF NOT EXISTS customers (\n  customer_id TEXT PRIMARY KEY, name TEXT, phone TEXT, email TEXT,\n  status TEXT DEFAULT 'active', total_orders INT DEFAULT 0, last_activity TIMESTAMPTZ);\nCREATE TABLE IF NOT EXISTS messages (\n  message_id BIGSERIAL PRIMARY KEY, customer_id TEXT, content TEXT,\n  timestamp TIMESTAMPTZ DEFAULT NOW(), category TEXT);\nCREATE TABLE IF NOT EXISTS orders (\n  order_id TEXT PRIMARY KEY, customer_id TEXT, order_details JSONB, status TEXT);\nCREATE TABLE IF NOT EXISTS memory (\n  customer_id TEXT PRIMARY KEY, last_100_messages TEXT, updated_at TIMESTAMPTZ DEFAULT NOW());\nCREATE TABLE IF NOT EXISTS knowledge_base (\n  id BIGSERIAL PRIMARY KEY, faq TEXT, company_policies TEXT,\n  product_information TEXT, document TSVECTOR,\n  CONSTRAINT cap_1000_customers CHECK (true));\nCREATE TABLE IF NOT EXISTS payments (\n  payment_id TEXT, customer_id TEXT, status TEXT, amount NUMERIC, currency TEXT, paid_at TIMESTAMPTZ);\nCREATE TABLE IF NOT EXISTS invoices (\n  invoice_id TEXT PRIMARY KEY, customer_id TEXT, total NUMERIC, due_date DATE, status TEXT);\nCREATE TABLE IF NOT EXISTS tickets (\n  ticket_id TEXT PRIMARY KEY, customer_id TEXT, subject TEXT, priority TEXT,\n  category TEXT, status TEXT DEFAULT 'open', created_at TIMESTAMPTZ DEFAULT NOW());\nCREATE TABLE IF NOT EXISTS ticket_notes (\n  id BIGSERIAL PRIMARY KEY, ticket_id TEXT, author TEXT, note TEXT, created_at TIMESTAMPTZ DEFAULT NOW());\nCREATE TABLE IF NOT EXISTS incidents (\n  id BIGSERIAL PRIMARY KEY, incident_time TIMESTAMPTZ, node TEXT, message TEXT, severity TEXT, status TEXT);\nCREATE TABLE IF NOT EXISTS incident_records (\n  incident_id TEXT PRIMARY KEY, payload TEXT, created_at TIMESTAMPTZ DEFAULT NOW());\nCREATE TABLE IF NOT EXISTS analytics (\n  id BIGSERIAL PRIMARY KEY, request_id TEXT, customer_id TEXT, channel TEXT,\n  category TEXT, priority TEXT, response_ms INT, created_at TIMESTAMPTZ DEFAULT NOW());\nCREATE INDEX IF NOT EXISTS idx_messages_customer ON messages(customer_id, timestamp DESC);\nCREATE INDEX IF NOT EXISTS idx_orders_customer ON orders(customer_id);\nCREATE INDEX IF NOT EXISTS idx_kb_doc ON knowledge_base USING GIN(document);",
+        "options": {}
+      },
+      "id": "2c8d92bf-cb2d-4d5c-b43f-07f38dab1063",
+      "name": "Create Database Schema",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -1350,
+        2400
+      ],
+      "notesInFlow": true,
+      "credentials": {
+        "postgres": {
+          "id": "cred-postgres",
+          "name": "Orion PostgreSQL Database"
+        }
+      },
+      "notes": "Idempotent DDL for all Orion tables.",
+      "settings": {
+        "retryOnFail": true,
+        "maxTries": 5,
+        "waitBetweenTries": 5000,
+        "onError": "continueRegularOutput",
+        "alwaysOutputData": false
+      }
+    }
+  ],
+  "connections": {
+    "Telegram Trigger": {
+      "main": [
+        [
+          {
+            "node": "Normalize Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "WhatsApp Trigger": {
+      "main": [
+        [
+          {
+            "node": "Normalize Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Email Trigger": {
+      "main": [
+        [
+          {
+            "node": "Normalize Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook API": {
+      "main": [
+        [
+          {
+            "node": "Normalize Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "CRM Events": {
+      "main": [
+        [
+          {
+            "node": "Normalize Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Data": {
+      "main": [
+        [
+          {
+            "node": "Detect Content Type",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Detect Content Type": {
+      "main": [
+        [
+          {
+            "node": "Download Voice",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Download Image",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Extract Document Text",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Extract Document Text",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Analyze Video",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Merge Channels",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Download Voice": {
+      "main": [
+        [
+          {
+            "node": "Speech to Text",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Speech to Text": {
+      "main": [
+        [
+          {
+            "node": "Extract Voice Intent",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Handle Critical Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Voice Intent": {
+      "main": [
+        [
+          {
+            "node": "Merge Channels",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Download Image": {
+      "main": [
+        [
+          {
+            "node": "Analyze Image",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Analyze Image": {
+      "main": [
+        [
+          {
+            "node": "Merge Channels",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Handle Critical Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Document Text": {
+      "main": [
+        [
+          {
+            "node": "Summarize Document",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Handle Critical Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Summarize Document": {
+      "main": [
+        [
+          {
+            "node": "Merge Channels",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Handle Critical Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Analyze Video": {
+      "main": [
+        [
+          {
+            "node": "Merge Channels",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge Channels": {
+      "main": [
+        [
+          {
+            "node": "Store Customer Info",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Store Customer Info": {
+      "main": [
+        [
+          {
+            "node": "Retrieve Customer Memory",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Handle Critical Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Retrieve Customer Memory": {
+      "main": [
+        [
+          {
+            "node": "Retrieve Previous Orders",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Handle Critical Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Retrieve Previous Orders": {
+      "main": [
+        [
+          {
+            "node": "Retrieve Customer History",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Retrieve Customer History": {
+      "main": [
+        [
+          {
+            "node": "Search Knowledge Base",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Search Knowledge Base": {
+      "main": [
+        [
+          {
+            "node": "Claude AI Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claude AI Agent": {
+      "main": [
+        [
+          {
+            "node": "Intelligent Routing",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Handle Critical Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claude Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Claude AI Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Conversation Memory": {
+      "ai_memory": [
+        [
+          {
+            "node": "Claude AI Agent",
+            "type": "ai_memory",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Knowledge Base Tool": {
+      "ai_tool": [
+        [
+          {
+            "node": "Claude AI Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Order Lookup Tool": {
+      "ai_tool": [
+        [
+          {
+            "node": "Claude AI Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ticket Tool": {
+      "ai_tool": [
+        [
+          {
+            "node": "Claude AI Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Intelligent Routing": {
+      "main": [
+        [
+          {
+            "node": "AI Analysis - General Support",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "AI Analysis - Sales",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "AI Analysis - Technical",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "AI Analysis - Billing And Payments",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "AI Analysis - Complaints And Escalations",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "AI Analysis - General Support",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Analysis - General Support": {
+      "main": [
+        [
+          {
+            "node": "Priority Detection - General Support",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Priority Detection - General Support": {
+      "main": [
+        [
+          {
+            "node": "Sentiment Analysis - General Support",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sentiment Analysis - General Support": {
+      "main": [
+        [
+          {
+            "node": "Suggested Response - General Support",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Suggested Response - General Support": {
+      "main": [
+        [
+          {
+            "node": "Merge Path Responses",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Analysis - Sales": {
+      "main": [
+        [
+          {
+            "node": "Priority Detection - Sales",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Priority Detection - Sales": {
+      "main": [
+        [
+          {
+            "node": "Sentiment Analysis - Sales",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sentiment Analysis - Sales": {
+      "main": [
+        [
+          {
+            "node": "Suggested Response - Sales",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Suggested Response - Sales": {
+      "main": [
+        [
+          {
+            "node": "Merge Path Responses",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Analysis - Technical": {
+      "main": [
+        [
+          {
+            "node": "Priority Detection - Technical",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Priority Detection - Technical": {
+      "main": [
+        [
+          {
+            "node": "Sentiment Analysis - Technical",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sentiment Analysis - Technical": {
+      "main": [
+        [
+          {
+            "node": "Suggested Response - Technical",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Suggested Response - Technical": {
+      "main": [
+        [
+          {
+            "node": "Merge Path Responses",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Analysis - Billing And Payments": {
+      "main": [
+        [
+          {
+            "node": "Priority Detection - Billing And Payments",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Priority Detection - Billing And Payments": {
+      "main": [
+        [
+          {
+            "node": "Sentiment Analysis - Billing And Payments",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sentiment Analysis - Billing And Payments": {
+      "main": [
+        [
+          {
+            "node": "Suggested Response - Billing And Payments",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Suggested Response - Billing And Payments": {
+      "main": [
+        [
+          {
+            "node": "Merge Path Responses",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Analysis - Complaints And Escalations": {
+      "main": [
+        [
+          {
+            "node": "Priority Detection - Complaints And Escalations",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Priority Detection - Complaints And Escalations": {
+      "main": [
+        [
+          {
+            "node": "Sentiment Analysis - Complaints And Escalations",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sentiment Analysis - Complaints And Escalations": {
+      "main": [
+        [
+          {
+            "node": "Suggested Response - Complaints And Escalations",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Suggested Response - Complaints And Escalations": {
+      "main": [
+        [
+          {
+            "node": "Merge Path Responses",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge Path Responses": {
+      "main": [
+        [
+          {
+            "node": "Update Memory",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Memory": {
+      "main": [
+        [
+          {
+            "node": "CRM: Create Ticket",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "CRM: Create Ticket": {
+      "main": [
+        [
+          {
+            "node": "CRM: Store AI Notes",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Handle Critical Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "CRM: Store AI Notes": {
+      "main": [
+        [
+          {
+            "node": "Verify Payment Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verify Payment Status": {
+      "main": [
+        [
+          {
+            "node": "Track Invoices",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Handle Critical Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Track Invoices": {
+      "main": [
+        [
+          {
+            "node": "Select Output Channel",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Select Output Channel": {
+      "main": [
+        [
+          {
+            "node": "Reply on Telegram",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Reply on WhatsApp",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Reply on Email",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Reply on Telegram": {
+      "main": [
+        [
+          {
+            "node": "Log Analytics",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Reply on WhatsApp": {
+      "main": [
+        [
+          {
+            "node": "Log Analytics",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Reply on Email": {
+      "main": [
+        [
+          {
+            "node": "Log Analytics",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Respond to Webhook": {
+      "main": [
+        [
+          {
+            "node": "Log Analytics",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Analytics": {
+      "main": [
+        [
+          {
+            "node": "Track Response Time",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Error Trigger": {
+      "main": [
+        [
+          {
+            "node": "Log Failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Handle Critical Error": {
+      "main": [
+        [
+          {
+            "node": "Log Failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Failure": {
+      "main": [
+        [
+          {
+            "node": "Create Incident Record",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Incident Record": {
+      "main": [
+        [
+          {
+            "node": "Notify Administrator",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Payment Reminders Trigger": {
+      "main": [
+        [
+          {
+            "node": "Send Payment Reminders",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Initialize Database": {
+      "main": [
+        [
+          {
+            "node": "Create Database Schema",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "saveExecutionProgress": true,
+    "saveManualExecutions": true,
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "callerPolicy": "workflowsFromSameOwner",
+    "errorWorkflow": "current"
+  },
+  "pinData": {},
+  "tags": [
+    {
+      "name": "AI Support"
+    },
+    {
+      "name": "Enterprise"
+    },
+    {
+      "name": "Orion"
+    }
+  ],
+  "meta": {
+    "templateId": "orion-support-hub",
+    "instanceId": "orion-support-hub",
+    "description": "Enterprise AI customer support automation: multi-channel intake, media processing, Claude AI agent, intelligent routing, DB memory, CRM, payments, monitoring and resilient error handling."
+  }
+}
